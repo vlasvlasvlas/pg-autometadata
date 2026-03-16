@@ -36,6 +36,8 @@ PYTHONPATH=src python run_pipeline.py --help
 PYTHONPATH=src python run_benchmark.py --help
 ```
 
+Nota: los runners Python cargan automaticamente `.env` desde la raiz del repo si existe.
+
 ## Estructura del proyecto
 
 ```text
@@ -109,6 +111,15 @@ Tenes dos estrategias:
 
 En discovery/sampling, connection.url_env tiene prioridad sobre connection.profile.
 
+Tambien podes definir campos del perfil por variable de entorno para no exponer datos sensibles en git:
+
+1. host_env
+2. port_env
+3. database_env
+4. user_env
+5. password_env
+6. sslmode_env
+
 Ejemplo rapido con perfil:
 
 ```yaml
@@ -126,6 +137,19 @@ profiles:
 export PGPASSWORD="tu_password"
 ```
 
+Ejemplo perfil productivo sin host/user en YAML:
+
+```yaml
+profiles:
+	db_server:
+		host_env: PGHOST
+		port_env: PGPORT
+		database_env: PGDATABASE
+		user_env: PGUSER
+		password_env: PGPASSWORD
+		sslmode_env: PGSSLMODE
+```
+
 ### 2) Discovery
 
 Archivo: config/discovery.yaml
@@ -139,6 +163,22 @@ Campos clave:
 
 Salida esperada: output/inventory.csv
 
+Comportamiento include/exclude schemas:
+
+1. include_schemas con valores: se procesa solo esa lista.
+2. include_schemas vacio []: se procesan todos los schemas.
+3. exclude_schemas siempre descuenta del resultado anterior.
+
+Ejemplo para procesar todos:
+
+```yaml
+scope:
+	include_schemas: []
+	exclude_schemas:
+		- pg_catalog
+		- information_schema
+```
+
 ### 3) Sampling
 
 Archivo: config/sampling.yaml
@@ -149,6 +189,7 @@ Campos clave:
 2. sampling.sample_size
 3. sampling.max_value_length
 4. sampling.distinct_preferred
+5. runtime.resume
 
 Salida esperada: output/column_samples.jsonl
 
@@ -163,6 +204,7 @@ Campos clave:
 3. llm.openai_compatible.api_key_env
 4. llm.openai_compatible.model
 5. llm.openai_compatible.temperature
+6. runtime.resume
 
 Salida esperada: output/data_dictionary.jsonl
 
@@ -192,6 +234,15 @@ Campos clave:
 2. evaluation.sample_limit
 3. evaluation.selection_method
 4. evaluation.low_confidence_threshold
+5. runtime.resume
+
+Contexto de base en benchmark:
+
+1. `context.database_env` define el nombre de variable de entorno para el nombre de DB del prompt.
+2. Si no esta, usa `PGDATABASE`.
+3. `context.database` queda como fallback manual.
+
+Nota: esto solo enriquece el prompt del LLM. Benchmark no abre conexion a Postgres.
 
 Salidas esperadas:
 
@@ -200,7 +251,44 @@ Salidas esperadas:
 3. output/benchmark/benchmark_summary.csv
 4. output/benchmark/manual_review.csv
 
+## Reanudar corridas (resume)
+
+Para no perder trabajo si se corta el proceso:
+
+1. sampling, inference y benchmark soportan `runtime.resume: true`.
+2. Con resume activo, si el output ya existe, se abre en append y se saltean columnas ya procesadas.
+3. La clave de deduplicacion es: schema_name + table_name + column_name.
+
+Comportamiento por fase:
+
+1. discovery: reescribe `output/inventory.csv` completo.
+2. sampling: reanuda `output/column_samples.jsonl`.
+3. inference: reanuda `output/data_dictionary.jsonl`.
+4. review: reescribe salidas de review en base al diccionario actual.
+5. benchmark: reanuda por modelo en `output/benchmark/predictions_*.jsonl`.
+
+Si queres corrida limpia desde cero, borra outputs previos o pone `runtime.resume: false`.
+
 ## Uso
+
+### Menu interactivo (recomendado)
+
+Para ejecutar todo por pasos desde un menu:
+
+```bash
+./scripts/menu.sh
+```
+
+Opciones disponibles en el menu:
+
+1. Mostrar entorno actual (.env)
+2. Ejecutar fases 1+2
+3. Setup LLM local
+4. Health check LLM
+5. Ejecutar fases 3+4
+6. Ejecutar pipeline completo 1..4
+7. Ejecutar benchmark
+8. Ver carpeta output
 
 ### A) Ejecutar pipeline completo (1 a 4)
 
@@ -281,6 +369,8 @@ source config/llm.local.env
 
 Editar config/llm.local.env si queres otro modelo.
 
+Opcional: si copias esas variables tambien a `.env`, los runners las toman automaticamente.
+
 ### Paso 4: health check del servidor local
 
 ```bash
@@ -337,6 +427,11 @@ Regla sugerida de decision:
 
 ```bash
 # Postgres
+export PGHOST="your_db_host"
+export PGPORT="5432"
+export PGDATABASE="your_db_name"
+export PGUSER="your_db_user"
+export PGSSLMODE="require"
 export PGPASSWORD="tu_password"
 
 # LLM OpenAI-compatible local
@@ -394,6 +489,19 @@ Checklist:
 1. Revisar host, port, database y user en config/connections.yaml.
 2. Confirmar variable de password (password_env) exportada.
 3. Probar conectividad de red/VPN.
+
+### Seguridad: evitar cambios en DB
+
+Discovery y Sampling tienen protecciones activas para no romper datos:
+
+1. `runtime.enforce_select_only: true`
+: permite solo queries SELECT/WITH en SQL de archivo.
+2. `runtime.force_read_only_connection: true`
+: fuerza la sesion PostgreSQL en modo read-only.
+
+Adicional recomendado:
+
+1. usar un usuario de solo lectura en PostgreSQL (rol sin permisos DDL/DML).
 
 ### No aparecen columnas en sampling
 

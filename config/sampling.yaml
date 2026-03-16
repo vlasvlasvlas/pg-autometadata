@@ -3,7 +3,7 @@ phase: sampling
 
 connection:
   # Mismo criterio que discovery.
-  profile: dev_local
+  profile: db_server
   # Si preferis URI desde variable, descomenta:
   # url_env: PG_URI_DEV
 
@@ -14,8 +14,12 @@ source:
   use_inventory_file: true
 
 scope:
+  # REGLA IMPORTANTE:
+  # - include_schemas con valores => SOLO esos schemas (lista blanca).
+  # - include_schemas vacio []   => TODOS los schemas.
+  # - exclude_schemas siempre resta sobre el conjunto anterior.
   include_schemas:
-    - public
+    []
   exclude_schemas:
     - pg_catalog
     - information_schema
@@ -41,7 +45,7 @@ sampling:
   # Cantidad de ejemplos por columna.
   sample_size: 50
   # Truncado de cada valor para controlar tokens.
-  max_value_length: 200
+  max_value_length: 350
   # true: prioriza valores distintos para mejorar cobertura semantica.
   distinct_preferred: true
   # Semilla para reproducibilidad del muestreo.
@@ -58,5 +62,11 @@ sql:
 runtime:
   # Cantidad de columnas procesadas por lote.
   batch_size: 100
+  # Seguridad SQL: solo permite SELECT/WITH en queries de archivo.
+  enforce_select_only: true
+  # Fuerza sesion read-only en PostgreSQL.
+  force_read_only_connection: true
+  # true: reanuda usando output existente y evita reprocesar columnas ya escritas.
+  resume: true
   fail_fast: true
   log_level: info

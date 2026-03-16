@@ -9,8 +9,10 @@ prompt:
   template_path: prompts/inference_prompt.txt
 
 context:
-  # Valor opcional para enriquecer el prompt.
-  database: my_database
+  # Contexto para el prompt (no es conexion real a DB).
+  # Prioridad: database_env -> database -> PGDATABASE
+  database_env: PGDATABASE
+  database: ""
 
 llm:
   # Para benchmark de calidad usar openai_compatible con endpoint local.
@@ -43,6 +45,8 @@ output:
   summary_csv: output/benchmark/benchmark_summary.csv
 
 runtime:
+  # true: reanuda por modelo usando predictions_*.jsonl existentes.
+  resume: true
   # Si un modelo falla, usa heuristica para no cortar corrida.
   fallback_on_error: true
   fail_fast: true

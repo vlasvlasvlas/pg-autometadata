@@ -19,8 +19,20 @@ venv/
 # macOS
 .DS_Store
 
-# Runtime outputs
+# Runtime outputs and DB-derived artifacts
 output/
+input/
+inputs/
+data/
+exports/
+
+# Common generated files with sampled/inferred content
+*.jsonl
+*.ndjson
+
+# Safety net for common export formats containing DB data
+*.sql.gz
+*.dump
 
 # IDE/cache
 .pytest_cache/

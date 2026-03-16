@@ -2,6 +2,7 @@ import argparse
 import copy
 import csv
 import json
+import os
 import random
 import re
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any, Dict, List, Tuple
 from pg_autometadata.pipeline import (
     ensure_parent,
     heuristic_infer,
+    load_local_env,
     load_structured_file,
     openai_compatible_infer,
     read_jsonl,
@@ -123,10 +125,16 @@ def run_benchmark(root: Path, cfg_path: Path) -> None:
     records = select_records(all_records, cfg)
     template_text = template_path.read_text(encoding="utf-8")
     low_conf_threshold = float(cfg.get("evaluation", {}).get("low_confidence_threshold", 0.6))
+    resume = bool(cfg.get("runtime", {}).get("resume", True))
 
     models = cfg.get("models", [])
     if not models:
         raise RuntimeError("No hay modelos definidos en config/benchmark.yaml")
+
+    context_cfg = cfg.get("context", {})
+    db_env_name = context_cfg.get("database_env")
+    db_from_env = os.getenv(str(db_env_name)) if db_env_name else os.getenv("PGDATABASE")
+    database_context = db_from_env or context_cfg.get("database", "")
 
     all_predictions: List[Dict[str, Any]] = []
     summary_rows: List[Dict[str, Any]] = []
@@ -134,40 +142,57 @@ def run_benchmark(root: Path, cfg_path: Path) -> None:
     for model_idx, model_cfg in enumerate(models, start=1):
         model_name = model_cfg["name"]
         model_slug = slugify(model_name)
-        model_predictions: List[Dict[str, Any]] = []
+        model_out = output_dir / f"predictions_{model_idx}_{model_slug}.jsonl"
+        ensure_parent(model_out)
+
+        existing_predictions = read_jsonl(model_out) if (resume and model_out.exists()) else []
+        existing_keys = {
+            f"{p.get('schema_name','')}||{p.get('table_name','')}||{p.get('column_name','')}"
+            for p in existing_predictions
+        }
+        file_mode = "a" if (resume and model_out.exists()) else "w"
 
         fallback_count = 0
-        for item_idx, record in enumerate(records, start=1):
-            enriched = dict(record)
-            enriched["database"] = cfg.get("context", {}).get("database", "")
+        with model_out.open(file_mode, encoding="utf-8") as out_f:
+            for item_idx, record in enumerate(records, start=1):
+                key = (
+                    f"{record.get('schema_name','')}||"
+                    f"{record.get('table_name','')}||"
+                    f"{record.get('column_name','')}"
+                )
+                if key in existing_keys:
+                    continue
 
-            inferred, used_fallback = infer_one(
-                enriched,
-                cfg=cfg,
-                template_text=template_text,
-                model_name=model_name,
-            )
-            if used_fallback:
-                fallback_count += 1
+                enriched = dict(record)
+                enriched["database"] = database_context
 
-            pred = {
-                "item_id": item_idx,
-                "model": model_name,
-                "schema_name": record.get("schema_name"),
-                "table_name": record.get("table_name"),
-                "column_name": record.get("column_name"),
-                "data_type": record.get("data_type"),
-                "samples_preview": json.dumps((record.get("samples", []) or [])[:5], ensure_ascii=False),
-                "description": inferred.get("description", ""),
-                "business_meaning": inferred.get("business_meaning", ""),
-                "confidence": float(inferred.get("confidence", 0.0)),
-                "notes": inferred.get("notes", ""),
-            }
-            model_predictions.append(pred)
+                inferred, used_fallback = infer_one(
+                    enriched,
+                    cfg=cfg,
+                    template_text=template_text,
+                    model_name=model_name,
+                )
+                if used_fallback:
+                    fallback_count += 1
 
-        model_out = output_dir / f"predictions_{model_idx}_{model_slug}.jsonl"
-        write_jsonl(model_out, model_predictions)
+                pred = {
+                    "item_id": item_idx,
+                    "model": model_name,
+                    "schema_name": record.get("schema_name"),
+                    "table_name": record.get("table_name"),
+                    "column_name": record.get("column_name"),
+                    "data_type": record.get("data_type"),
+                    "samples_preview": json.dumps((record.get("samples", []) or [])[:5], ensure_ascii=False),
+                    "description": inferred.get("description", ""),
+                    "business_meaning": inferred.get("business_meaning", ""),
+                    "confidence": float(inferred.get("confidence", 0.0)),
+                    "notes": inferred.get("notes", ""),
+                }
+                out_f.write(json.dumps(pred, ensure_ascii=False) + "\n")
+                out_f.flush()
+                existing_keys.add(key)
 
+        model_predictions = read_jsonl(model_out)
         confidences = [float(p.get("confidence", 0.0)) for p in model_predictions]
         low_conf_count = sum(1 for c in confidences if c < low_conf_threshold)
         avg_conf = (sum(confidences) / len(confidences)) if confidences else 0.0
@@ -243,6 +268,8 @@ def main() -> None:
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
+    load_local_env(root)
+
     cfg_path = (root / args.config).resolve()
     run_benchmark(root, cfg_path)
 

@@ -11,13 +11,14 @@ profiles:
     password_env: PGPASSWORD
     sslmode: disable
 
-  qa_server:
-    host: qa-db.company.internal
-    port: 5432
-    database: my_database
-    user: metadata_reader
-    password_env: QA_PG_PASSWORD
-    sslmode: require
+  db_server:
+    # Valores sensibles/productivos via variables de entorno.
+    host_env: PGHOST
+    port_env: PGPORT
+    database_env: PGDATABASE
+    user_env: PGUSER
+    password_env: PGPASSWORD
+    sslmode_env: PGSSLMODE
 
 # Opcion alternativa: usar URI completa desde variable de entorno.
 # Si usas esto, prioriza connection.url_env en los archivos de fase.

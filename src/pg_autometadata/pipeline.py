@@ -40,6 +40,90 @@ def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+
+        # Soporte para valores entre comillas simples o dobles.
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            value = value[1:-1]
+
+        # Mantener prioridad de variables ya exportadas en la shell.
+        os.environ.setdefault(key, value)
+
+
+def load_local_env(root: Path) -> None:
+    load_env_file(root / ".env")
+
+
+def strip_sql_comments(query: str) -> str:
+    no_block = re.sub(r"/\*.*?\*/", "", query, flags=re.S)
+    no_line = re.sub(r"--.*?$", "", no_block, flags=re.M)
+    return no_line
+
+
+def assert_select_only_query(query: str, source: str) -> None:
+    cleaned = strip_sql_comments(query).strip()
+    if not cleaned:
+        raise RuntimeError(f"Empty SQL query is not allowed: {source}")
+
+    normalized = cleaned.rstrip()
+    if ";" in normalized[:-1]:
+        raise RuntimeError(f"Only single-statement SELECT/WITH is allowed: {source}")
+
+    head = normalized.lower().rstrip(";").lstrip()
+    if not (head.startswith("select") or head.startswith("with")):
+        raise RuntimeError(f"Only SELECT/WITH queries are allowed: {source}")
+
+    forbidden = re.compile(
+        r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|"
+        r"call|execute|merge|vacuum|analyze|refresh|reindex|cluster|comment|"
+        r"copy|do|set|reset)\b",
+        flags=re.I,
+    )
+    if forbidden.search(head):
+        raise RuntimeError(f"Detected non read-only SQL token in query: {source}")
+
+
+def apply_read_only_guard(conn: psycopg.Connection, cfg: Dict[str, Any]) -> None:
+    runtime_cfg = cfg.get("runtime", {})
+    if not bool(runtime_cfg.get("force_read_only_connection", True)):
+        return
+
+    with conn.cursor() as cur:
+        cur.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+
+
+def get_profile_value(
+    profile: Dict[str, Any],
+    field: str,
+    default: Optional[Any] = None,
+) -> Any:
+    env_field = f"{field}_env"
+    env_name = profile.get(env_field)
+    if env_name:
+        env_value = os.getenv(str(env_name))
+        if env_value is None or env_value == "":
+            raise RuntimeError(f"Missing environment variable for profile field {field}: {env_name}")
+        return env_value
+    return profile.get(field, default)
+
+
 def build_conninfo(connections_cfg: Dict[str, Any], phase_cfg: Dict[str, Any]) -> str:
     conn_cfg = phase_cfg.get("connection", {})
     url_env = conn_cfg.get("url_env")
@@ -58,11 +142,11 @@ def build_conninfo(connections_cfg: Dict[str, Any], phase_cfg: Dict[str, Any]) -
     if not profile:
         raise RuntimeError(f"Connection profile not found: {profile_name}")
 
-    host = profile.get("host", "localhost")
-    port = profile.get("port", 5432)
-    database = conn_cfg.get("database") or profile.get("database")
-    user = profile.get("user")
-    sslmode = profile.get("sslmode", "prefer")
+    host = get_profile_value(profile, "host", "localhost")
+    port = get_profile_value(profile, "port", 5432)
+    database = conn_cfg.get("database") or get_profile_value(profile, "database")
+    user = get_profile_value(profile, "user")
+    sslmode = get_profile_value(profile, "sslmode", "prefer")
 
     password_env = profile.get("password_env")
     password = os.getenv(password_env, "") if password_env else ""
@@ -73,7 +157,7 @@ def build_conninfo(connections_cfg: Dict[str, Any], phase_cfg: Dict[str, Any]) -
         raise RuntimeError("User is required in connection profile")
 
     return (
-        f"host={host} port={port} dbname={database} user={user} "
+        f"host={host} port={int(port)} dbname={database} user={user} "
         f"password={password} sslmode={sslmode}"
     )
 
@@ -81,6 +165,9 @@ def build_conninfo(connections_cfg: Dict[str, Any], phase_cfg: Dict[str, Any]) -
 def list_columns(conn: psycopg.Connection, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     query_path = Path(cfg["sql"]["list_columns_file"])
     query = query_path.read_text(encoding="utf-8")
+    runtime_cfg = cfg.get("runtime", {})
+    if bool(runtime_cfg.get("enforce_select_only", True)):
+        assert_select_only_query(query, str(query_path))
 
     with conn.cursor() as cur:
         cur.execute(query)
@@ -94,6 +181,9 @@ def list_columns(conn: psycopg.Connection, cfg: Dict[str, Any]) -> List[Dict[str
 def list_candidate_columns(conn: psycopg.Connection, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     query_path = Path(cfg["sql"]["list_candidates_file"])
     query = query_path.read_text(encoding="utf-8")
+    runtime_cfg = cfg.get("runtime", {})
+    if bool(runtime_cfg.get("enforce_select_only", True)):
+        assert_select_only_query(query, str(query_path))
 
     with conn.cursor() as cur:
         cur.execute(query)
@@ -193,42 +283,49 @@ def sample_column_values(
     max_value_length: int,
     distinct_preferred: bool,
 ) -> List[str]:
+    max_len_literal = sql.Literal(int(max_value_length))
+    sample_size_literal = sql.Literal(int(sample_size))
+
     if distinct_preferred:
         query = sql.SQL(
             """
                         SELECT t.val
                         FROM (
-                                SELECT DISTINCT LEFT(CAST({column} AS text), %s) AS val
+                SELECT DISTINCT LEFT(CAST({column} AS text), {max_len}) AS val
                                 FROM {schema}.{table}
                                 WHERE {column} IS NOT NULL
                                     AND CAST({column} AS text) <> ''
                         ) AS t
                         ORDER BY random()
-                        LIMIT %s
+            LIMIT {sample_size}
             """
         ).format(
             column=sql.Identifier(column_name),
             schema=sql.Identifier(schema_name),
             table=sql.Identifier(table_name),
+            max_len=max_len_literal,
+            sample_size=sample_size_literal,
         )
     else:
         query = sql.SQL(
             """
-            SELECT LEFT(CAST({column} AS text), %s) AS val
+            SELECT LEFT(CAST({column} AS text), {max_len}) AS val
             FROM {schema}.{table}
             WHERE {column} IS NOT NULL
               AND CAST({column} AS text) <> ''
             ORDER BY random()
-            LIMIT %s
+            LIMIT {sample_size}
             """
         ).format(
             column=sql.Identifier(column_name),
             schema=sql.Identifier(schema_name),
             table=sql.Identifier(table_name),
+            max_len=max_len_literal,
+            sample_size=sample_size_literal,
         )
 
     with conn.cursor() as cur:
-        cur.execute(query, (max_value_length, sample_size))
+        cur.execute(query)
         rows = cur.fetchall()
 
     return [r[0] for r in rows if r and r[0] is not None]
@@ -250,6 +347,16 @@ def read_jsonl(path: Path) -> List[Dict[str, Any]]:
                 continue
             out.append(json.loads(line))
     return out
+
+
+def record_key(record: Dict[str, Any], fields: List[str]) -> str:
+    return "||".join(str(record.get(f, "")) for f in fields)
+
+
+def load_existing_jsonl_keys(path: Path, key_fields: List[str]) -> set[str]:
+    if not path.exists():
+        return set()
+    return {record_key(item, key_fields) for item in read_jsonl(path)}
 
 
 def heuristic_infer(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -296,7 +403,12 @@ def render_prompt(template: str, record: Dict[str, Any]) -> str:
         "data_type": record.get("data_type", ""),
         "samples": samples_json,
     }
-    return template.format(**values)
+    # Reemplazo seguro de placeholders para no romperse con llaves JSON
+    # presentes en el cuerpo del prompt (ejemplo: schema de salida).
+    rendered = template
+    for key, value in values.items():
+        rendered = rendered.replace("{" + key + "}", str(value))
+    return rendered
 
 
 def extract_json_object(text: str) -> Dict[str, Any]:
@@ -324,6 +436,7 @@ def openai_compatible_infer(
     model = llm_cfg.get("model")
     temperature = float(llm_cfg.get("temperature", 0.1))
     max_tokens = int(llm_cfg.get("max_tokens", 400))
+    timeout_seconds = int(llm_cfg.get("timeout_seconds", 60))
 
     if not endpoint_env:
         raise RuntimeError("Missing llm.openai_compatible.endpoint_env")
@@ -359,7 +472,7 @@ def openai_compatible_infer(
         },
         method="POST",
     )
-    with request.urlopen(req, timeout=60) as resp:
+    with request.urlopen(req, timeout=timeout_seconds) as resp:
         body = resp.read().decode("utf-8")
 
     response_json = json.loads(body)
@@ -381,6 +494,7 @@ def openai_compatible_infer(
 def run_discovery(connections_cfg: Dict[str, Any], cfg: Dict[str, Any], root: Path) -> None:
     conninfo = build_conninfo(connections_cfg, cfg)
     with psycopg.connect(conninfo) as conn:
+        apply_read_only_guard(conn, cfg)
         records = list_columns(conn, cfg)
 
     output_path = root / cfg["inventory"]["output_path"]
@@ -401,14 +515,30 @@ def run_sampling(connections_cfg: Dict[str, Any], cfg: Dict[str, Any], root: Pat
 
     # Reusar filtros para evitar sorpresas si el inventario fue amplio.
     candidates = apply_scope_filters(candidates, cfg)
+    if not candidates:
+        print(
+            "[2.sampling] Sin candidatos despues de filtros. "
+            "Revisar scope.include_schemas/include_tables/include_columns y type filters."
+        )
 
-    sample_size = int(cfg["sampling"].get("sample_size", 50))
-    max_value_length = int(cfg["sampling"].get("max_value_length", 200))
+    sample_size = int(cfg["sampling"]["sample_size"])
+    max_value_length = int(cfg["sampling"]["max_value_length"])
     distinct_preferred = bool(cfg["sampling"].get("distinct_preferred", True))
     random_seed = cfg["sampling"].get("random_seed")
 
-    sampled: List[Dict[str, Any]] = []
+    out_path = root / cfg["output"]["path"]
+    resume = bool(cfg.get("runtime", {}).get("resume", True))
+    key_fields = ["schema_name", "table_name", "column_name"]
+
+    existing_keys = load_existing_jsonl_keys(out_path, key_fields) if resume else set()
+    file_mode = "a" if (resume and out_path.exists()) else "w"
+    ensure_parent(out_path)
+
+    written = 0
+    skipped_existing = 0
+
     with psycopg.connect(conninfo) as conn:
+        apply_read_only_guard(conn, cfg)
         if random_seed is not None:
             seed = float(random_seed)
             if seed > 1 or seed < -1:
@@ -416,30 +546,43 @@ def run_sampling(connections_cfg: Dict[str, Any], cfg: Dict[str, Any], root: Pat
             with conn.cursor() as cur:
                 cur.execute("SELECT setseed(%s)", (seed,))
 
-        for c in candidates:
-            data_type = c.get("data_type", "")
-            udt_name = c.get("udt_name", "")
-            type_candidates = {str(data_type).lower(), str(udt_name).lower()}
-            if type_candidates.isdisjoint(SUPPORTED_TEXT_TYPES):
-                continue
+        with out_path.open(file_mode, encoding="utf-8") as out_f:
+            for c in candidates:
+                data_type = c.get("data_type", "")
+                udt_name = c.get("udt_name", "")
+                type_candidates = {str(data_type).lower(), str(udt_name).lower()}
+                if type_candidates.isdisjoint(SUPPORTED_TEXT_TYPES):
+                    continue
 
-            schema_name = c["schema_name"]
-            table_name = c["table_name"]
-            column_name = c["column_name"]
-            values = sample_column_values(
-                conn,
-                schema_name=schema_name,
-                table_name=table_name,
-                column_name=column_name,
-                sample_size=sample_size,
-                max_value_length=max_value_length,
-                distinct_preferred=distinct_preferred,
-            )
-            if not values:
-                continue
+                schema_name = c["schema_name"]
+                table_name = c["table_name"]
+                column_name = c["column_name"]
 
-            sampled.append(
-                {
+                key = record_key(
+                    {
+                        "schema_name": schema_name,
+                        "table_name": table_name,
+                        "column_name": column_name,
+                    },
+                    key_fields,
+                )
+                if key in existing_keys:
+                    skipped_existing += 1
+                    continue
+
+                values = sample_column_values(
+                    conn,
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    column_name=column_name,
+                    sample_size=sample_size,
+                    max_value_length=max_value_length,
+                    distinct_preferred=distinct_preferred,
+                )
+                if not values:
+                    continue
+
+                item = {
                     "schema_name": schema_name,
                     "table_name": table_name,
                     "column_name": column_name,
@@ -447,11 +590,20 @@ def run_sampling(connections_cfg: Dict[str, Any], cfg: Dict[str, Any], root: Pat
                     "udt_name": udt_name,
                     "samples": values,
                 }
-            )
+                out_f.write(json.dumps(item, ensure_ascii=False) + "\n")
+                out_f.flush()
+                existing_keys.add(key)
+                written += 1
 
-    out_path = root / cfg["output"]["path"]
-    write_jsonl(out_path, sampled)
-    print(f"[2.sampling] Muestras generadas: {out_path} ({len(sampled)} columnas)")
+    print(
+        f"[2.sampling] Muestras en: {out_path} "
+        f"(nuevas={written}, ya_existentes={skipped_existing})"
+    )
+    if written == 0 and skipped_existing == 0:
+        print(
+            "[2.sampling] No se generaron muestras. "
+            "Puede no haber valores no nulos/no vacios o hay filtros muy restrictivos."
+        )
 
 
 def run_inference(cfg: Dict[str, Any], root: Path) -> None:
@@ -459,41 +611,113 @@ def run_inference(cfg: Dict[str, Any], root: Path) -> None:
     out_path = root / cfg["output"]["path"]
 
     records = read_jsonl(in_path)
+    if not records:
+        print(
+            f"[3.inference] Input vacio en {in_path}. "
+            "Primero ejecutar 2.sampling o revisar filtros."
+        )
+        return
     mode = cfg.get("llm", {}).get("mode", "heuristic")
     template_path = root / cfg["prompt"]["template_path"]
     template_text = template_path.read_text(encoding="utf-8")
 
-    results: List[Dict[str, Any]] = []
-    for r in records:
-        if mode == "heuristic":
-            inf = heuristic_infer(r)
-        elif mode == "openai_compatible":
-            try:
-                inf = openai_compatible_infer(r, cfg, template_text)
-            except Exception as e:
+    resume = bool(cfg.get("runtime", {}).get("resume", True))
+    show_progress = bool(cfg.get("runtime", {}).get("show_progress", True))
+    progress_every = int(cfg.get("runtime", {}).get("progress_every", 1))
+    progress_every = 1 if progress_every <= 0 else progress_every
+    key_fields = ["schema_name", "table_name", "column_name"]
+    existing_keys = load_existing_jsonl_keys(out_path, key_fields) if resume else set()
+    file_mode = "a" if (resume and out_path.exists()) else "w"
+    ensure_parent(out_path)
+
+    written = 0
+    skipped_existing = 0
+    total = len(records)
+    processed = 0
+
+    with out_path.open(file_mode, encoding="utf-8") as out_f:
+        for r in records:
+            schema_name = str(r.get("schema_name", ""))
+            table_name = str(r.get("table_name", ""))
+            column_name = str(r.get("column_name", ""))
+            location = f"{schema_name}.{table_name}.{column_name}"
+            key = record_key(r, key_fields)
+            if key in existing_keys:
+                skipped_existing += 1
+                processed += 1
+                if show_progress and (processed % progress_every == 0 or processed == total):
+                    pct = (processed / total) * 100 if total else 100.0
+                    print(
+                        f"[3.inference] {processed}/{total} ({pct:.2f}%) "
+                        f"SKIP {location} | nuevos={written} ya_existentes={skipped_existing}",
+                        flush=True,
+                    )
+                continue
+
+            used_fallback = False
+            status = "OK"
+            if mode == "heuristic":
                 inf = heuristic_infer(r)
-                inf["notes"] = (
-                    "Fallo openai_compatible. Se uso fallback heuristico. "
-                    f"Error: {e}"
+                status = "HEURISTIC"
+            elif mode == "openai_compatible":
+                if show_progress:
+                    pct = (processed / total) * 100 if total else 100.0
+                    print(
+                        f"[3.inference] {processed}/{total} ({pct:.2f}%) RUNNING {location}",
+                        flush=True,
+                    )
+                try:
+                    inf = openai_compatible_infer(r, cfg, template_text)
+                except Exception as e:
+                    inf = heuristic_infer(r)
+                    used_fallback = True
+                    inf["notes"] = (
+                        "Fallo openai_compatible. Se uso fallback heuristico. "
+                        f"Error: {e}"
+                    )
+                    status = "FALLBACK_HEURISTIC"
+            else:
+                inf = heuristic_infer(r)
+                inf["notes"] = f"Modo no soportado: {mode}. Se uso fallback heuristico."
+                status = "UNSUPPORTED_MODE_HEURISTIC"
+
+            samples = r.get("samples", []) or []
+            examples = [str(v) for v in samples if v is not None][:2]
+
+            merged = {
+                "schema_name": schema_name,
+                "table_name": table_name,
+                "column_name": column_name,
+                "data_type": r.get("data_type"),
+                "description": inf.get("description"),
+                "business_meaning": inf.get("business_meaning"),
+                "confidence": float(inf.get("confidence", 0.0)),
+                "examples": examples,
+                "notes": inf.get("notes", ""),
+            }
+            out_f.write(json.dumps(merged, ensure_ascii=False) + "\n")
+            out_f.flush()
+            existing_keys.add(key)
+            written += 1
+            processed += 1
+
+            if show_progress and (processed % progress_every == 0 or processed == total):
+                pct = (processed / total) * 100 if total else 100.0
+                confidence = float(merged.get("confidence", 0.0))
+                fallback_tag = " fallback=true" if used_fallback else ""
+                print(
+                    f"[3.inference] {processed}/{total} ({pct:.2f}%) "
+                    f"{status} {location} conf={confidence:.2f}{fallback_tag} "
+                    f"| nuevos={written} ya_existentes={skipped_existing}",
+                    flush=True,
                 )
-        else:
-            inf = heuristic_infer(r)
-            inf["notes"] = f"Modo no soportado: {mode}. Se uso fallback heuristico."
 
-        merged = {
-            "schema_name": r.get("schema_name"),
-            "table_name": r.get("table_name"),
-            "column_name": r.get("column_name"),
-            "data_type": r.get("data_type"),
-            "description": inf.get("description"),
-            "business_meaning": inf.get("business_meaning"),
-            "confidence": float(inf.get("confidence", 0.0)),
-            "notes": inf.get("notes", ""),
-        }
-        results.append(merged)
-
-    write_jsonl(out_path, results)
-    print(f"[3.inference] Diccionario generado: {out_path} ({len(results)} atributos)")
+    print(
+        f"[3.inference] Diccionario en: {out_path} "
+        f"(nuevos={written}, ya_existentes={skipped_existing})"
+    )
+    if written == 0 and skipped_existing == 0:
+        print("[3.inference] No hubo filas para inferir.")
 
 
 def run_review(cfg: Dict[str, Any], root: Path) -> None:
@@ -600,6 +824,8 @@ def main() -> None:
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
+    load_local_env(root)
+
     phases_file = (root / args.phases).resolve()
     connections_file = (root / args.connections).resolve()
 

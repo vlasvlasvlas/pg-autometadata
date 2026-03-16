@@ -3,21 +3,34 @@ phase: discovery
 
 connection:
   # Perfil definido en config/connections.yaml.
-  profile: dev_local
+  profile: db_server
   # Opcion alternativa: URI completa en variable de entorno.
   # Si se usa, prioriza esta opcion.
   # url_env: PG_URI_DEV
 
 scope:
+  # REGLA IMPORTANTE:
+  # - include_schemas con valores => SOLO esos schemas (lista blanca).
+  # - include_schemas vacio []   => TODOS los schemas.
+  # - exclude_schemas siempre resta sobre el conjunto anterior.
+  #
+  # Ejemplo "todos":
+  # include_schemas: []
+  # exclude_schemas: [pg_catalog, information_schema]
+  #
+  # Ejemplo "solo algunos":
+  # include_schemas: [base, ventas]
+  # exclude_schemas: [ventas]
+  # Resultado final: solo base.
   include_schemas:
-    - public
+    - base
   exclude_schemas:
     - pg_catalog
     - information_schema
 
   include_relations:
+  # posibles: table, view
     - table
-    - view
 
   include_tables: []
   exclude_tables: []
@@ -47,5 +60,9 @@ sql:
 
 runtime:
   batch_size: 200
+  # Seguridad SQL: solo permite SELECT/WITH en queries de archivo.
+  enforce_select_only: true
+  # Fuerza sesion read-only en PostgreSQL.
+  force_read_only_connection: true
   fail_fast: true
   log_level: info
