@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "phase": "discovery",
+  "connection": {
+    "profile": "dev_local",
+    "database": "my_database"
+  },
+  "scope": {
+    "include_schemas": ["public"],
+    "exclude_schemas": ["pg_catalog", "information_schema"],
+    "include_relations": ["table", "view"],
+    "include_tables": [],
+    "exclude_tables": [],
+    "include_columns": [],
+    "exclude_columns": []
+  },
+  "column_type_filters": {
+    "include_data_types": ["character varying", "text", "character", "citext"],
+    "exclude_data_types": []
+  },
+  "inventory": {
+    "output_format": "csv",
+    "output_path": "output/inventory.csv",
+    "include_stats": false
+  },
+  "sql": {
+    "list_relations_file": "sql/discovery/list_relations.sql",
+    "list_columns_file": "sql/discovery/list_columns.sql"
+  },
+  "runtime": {
+    "batch_size": 200,
+    "fail_fast": true,
+    "log_level": "info"
+  }
+}

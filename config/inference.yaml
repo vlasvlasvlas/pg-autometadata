@@ -1,0 +1,36 @@
+version: 1
+phase: inference
+
+input:
+  # Input generado por 2.sampling.
+  samples_path: output/column_samples.jsonl
+
+prompt:
+  # Prompt template con placeholders de schema/table/column/samples.
+  template_path: prompts/inference_prompt.txt
+
+llm:
+  # heuristic: sin llamadas externas, util para arrancar rapido.
+  # openai_compatible: endpoint HTTP compatible con API estilo OpenAI.
+  mode: openai_compatible
+
+  openai_compatible:
+    # Endpoint estilo OpenAI Chat Completions.
+    endpoint_env: LLM_ENDPOINT
+    # API key (en local puede ser dummy, ejemplo: local).
+    api_key_env: LLM_API_KEY
+    # Recomendado calidad-first para metadata: qwen2.5:14b
+    model: qwen2.5:14b
+    # Temperatura baja para mayor consistencia en salidas JSON.
+    temperature: 0.1
+    max_tokens: 400
+
+output:
+  format: jsonl
+  # Diccionario inferido por atributo.
+  path: output/data_dictionary.jsonl
+
+runtime:
+  batch_size: 100
+  fail_fast: true
+  log_level: info

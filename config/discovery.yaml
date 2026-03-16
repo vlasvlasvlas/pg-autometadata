@@ -1,0 +1,53 @@
+version: 1
+phase: discovery
+
+connection:
+  # Perfil definido en config/connections.example.yaml.
+  profile: dev_local
+  # Base objetivo dentro de la conexión (override opcional del perfil).
+  database: my_database
+  # Opcion alternativa: URI completa en variable de entorno.
+  # Si se usa, prioriza esta opcion.
+  # url_env: PG_URI_DEV
+
+scope:
+  include_schemas:
+    - public
+  exclude_schemas:
+    - pg_catalog
+    - information_schema
+
+  include_relations:
+    - table
+    - view
+
+  include_tables: []
+  exclude_tables: []
+
+  include_columns: []
+  exclude_columns: []
+
+column_type_filters:
+  # Tipos a priorizar para Fase 1 del MVP.
+  include_data_types:
+    - character varying
+    - text
+    - character
+    - citext
+
+  # Mantener vacío para no excluir por tipo.
+  exclude_data_types: []
+
+inventory:
+  output_format: csv
+  output_path: output/inventory.csv
+  include_stats: false
+
+sql:
+  list_relations_file: sql/discovery/list_relations.sql
+  list_columns_file: sql/discovery/list_columns.sql
+
+runtime:
+  batch_size: 200
+  fail_fast: true
+  log_level: info

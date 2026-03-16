@@ -1,0 +1,63 @@
+version: 1
+phase: sampling
+
+connection:
+  # Mismo criterio que discovery.
+  profile: dev_local
+  database: my_database
+  # Si preferis URI desde variable, descomenta:
+  # url_env: PG_URI_DEV
+
+source:
+  # Puede venir desde output de Fase 1 o desde query directa.
+  inventory_path: output/inventory.csv
+  # true: usa inventory_path. false: consulta candidatos directo a DB.
+  use_inventory_file: true
+
+scope:
+  include_schemas:
+    - public
+  exclude_schemas:
+    - pg_catalog
+    - information_schema
+
+  include_tables: []
+  exclude_tables: []
+
+  include_columns: []
+  exclude_columns: []
+
+column_type_filters:
+  # Se recomienda mantener tipos textuales para mejor calidad semantica.
+  include_data_types:
+    - character varying
+    - text
+    - character
+    - citext
+  exclude_data_types: []
+
+sampling:
+  # random_non_null: toma valores no nulos y no vacios.
+  method: random_non_null
+  # Cantidad de ejemplos por columna.
+  sample_size: 50
+  # Truncado de cada valor para controlar tokens.
+  max_value_length: 200
+  # true: prioriza valores distintos para mejorar cobertura semantica.
+  distinct_preferred: true
+  # Semilla para reproducibilidad del muestreo.
+  random_seed: 42
+
+output:
+  format: jsonl
+  path: output/column_samples.jsonl
+
+sql:
+  list_candidates_file: sql/sampling/list_candidate_columns.sql
+  random_samples_file: sql/sampling/get_random_samples.sql
+
+runtime:
+  # Cantidad de columnas procesadas por lote.
+  batch_size: 100
+  fail_fast: true
+  log_level: info

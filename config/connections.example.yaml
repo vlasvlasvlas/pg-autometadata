@@ -1,0 +1,28 @@
+version: 1
+
+# Defini tus conexiones una sola vez aca.
+# Luego en discovery.yaml o sampling.yaml referis el nombre del perfil.
+profiles:
+  dev_local:
+    host: localhost
+    port: 5432
+    database: my_database
+    user: my_user
+    # Recomendado: guardar password en variable de entorno.
+    password_env: PGPASSWORD
+    sslmode: disable
+
+  qa_server:
+    host: qa-db.company.internal
+    port: 5432
+    database: my_database
+    user: metadata_reader
+    password_env: QA_PG_PASSWORD
+    sslmode: require
+
+# Opcion alternativa: usar URI completa desde variable de entorno.
+# Si usas esto, prioriza connection.url_env en los archivos de fase.
+# Ejemplo de URI: postgresql://user:pass@host:5432/dbname
+uri_env:
+  dev: PG_URI_DEV
+  qa: PG_URI_QA

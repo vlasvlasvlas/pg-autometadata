@@ -1,0 +1,34 @@
+version: 1
+pipeline_name: pg_autometadata_mvp
+
+# Orden explicito y numerado del flujo completo.
+phases:
+  # 1) Descubre inventario de columnas desde PostgreSQL.
+  - number: 1
+    value: discovery
+    enabled: true
+    config: config/discovery.yaml
+
+  # 2) Toma muestras textuales por columna candidata.
+  - number: 2
+    value: sampling
+    enabled: true
+    config: config/sampling.yaml
+
+  # 3) Ejecuta inferencia semantica con LLM.
+  - number: 3
+    value: inference
+    enabled: true
+    config: config/inference.yaml
+
+  # 4) Separa resultados por umbral de confianza.
+  - number: 4
+    value: review
+    enabled: true
+    config: config/review.yaml
+
+  # 5) Benchmark de calidad entre modelos (opcional).
+  - number: 5
+    value: benchmark
+    enabled: false
+    config: config/benchmark.yaml

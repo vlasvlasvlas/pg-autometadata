@@ -1,0 +1,18 @@
+version: 1
+phase: review
+
+input:
+  # Input generado por 3.inference.
+  dictionary_path: output/data_dictionary.jsonl
+
+review:
+  # confidence < threshold -> needs_review
+  low_confidence_threshold: 0.6
+
+output:
+  # Registros con confianza >= threshold.
+  approved_path: output/data_dictionary.approved.jsonl
+  # Registros que requieren validacion humana.
+  needs_review_path: output/data_dictionary.needs_review.jsonl
+  # Totales y metricas de corte.
+  summary_path: output/review_summary.json

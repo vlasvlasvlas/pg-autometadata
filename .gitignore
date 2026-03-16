@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual env
+.venv/
+venv/
+
+# Local env files
+.env
+.env.*
+config/llm.local.env
+
+# Backup files
+*.bak
+
+# macOS
+.DS_Store
+
+# Runtime outputs
+output/
+
+# IDE/cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
