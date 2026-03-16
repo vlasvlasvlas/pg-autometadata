@@ -588,7 +588,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--connections",
-        default="config/connections.example.yaml",
+        default="config/connections.yaml",
         help="Archivo de conexiones (YAML o JSON)",
     )
     parser.add_argument(

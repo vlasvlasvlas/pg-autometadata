@@ -4,7 +4,6 @@ phase: sampling
 connection:
   # Mismo criterio que discovery.
   profile: dev_local
-  database: my_database
   # Si preferis URI desde variable, descomenta:
   # url_env: PG_URI_DEV
 

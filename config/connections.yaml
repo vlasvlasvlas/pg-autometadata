@@ -1,7 +1,6 @@
 version: 1
 
-# Defini tus conexiones una sola vez aca.
-# Luego en discovery.yaml o sampling.yaml referis el nombre del perfil.
+# Defini tus conexiones en este archivo.
 profiles:
   dev_local:
     host: localhost

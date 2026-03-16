@@ -42,12 +42,13 @@ PYTHONPATH=src python run_benchmark.py --help
 .
 ├── config/
 │   ├── phases.yaml
-│   ├── connections.example.yaml
+│   ├── connections.yaml
 │   ├── discovery.yaml
 │   ├── sampling.yaml
 │   ├── inference.yaml
 │   ├── review.yaml
-│   └── benchmark.yaml
+│   ├── benchmark.yaml
+│   └── llm.local.env
 ├── prompts/
 │   └── inference_prompt.txt
 ├── sql/
@@ -99,7 +100,7 @@ flowchart TD
 
 ### 1) Conexion a PostgreSQL
 
-Archivo: config/connections.example.yaml
+Archivo: config/connections.yaml
 
 Tenes dos estrategias:
 
@@ -207,7 +208,7 @@ Salidas esperadas:
 PYTHONPATH=src .venv/bin/python run_pipeline.py \
 	--root . \
 	--phases config/phases.yaml \
-	--connections config/connections.example.yaml
+	--connections config/connections.yaml
 ```
 
 ### B) Ejecutar solo discovery + sampling
@@ -215,7 +216,7 @@ PYTHONPATH=src .venv/bin/python run_pipeline.py \
 ```bash
 PYTHONPATH=src .venv/bin/python run_pipeline.py \
 	--only 1,2 \
-	--connections config/connections.example.yaml
+	--connections config/connections.yaml
 ```
 
 ### C) Ejecutar solo inference + review
@@ -223,7 +224,7 @@ PYTHONPATH=src .venv/bin/python run_pipeline.py \
 ```bash
 PYTHONPATH=src .venv/bin/python run_pipeline.py \
 	--only 3,4 \
-	--connections config/connections.example.yaml
+	--connections config/connections.yaml
 ```
 
 ### D) Ejecutar benchmark de calidad
@@ -247,7 +248,7 @@ El repo ya incluye scripts para dejar el LLM local operativo sin tocar codigo.
 
 Archivos agregados:
 
-1. config/llm.local.example.env
+1. config/llm.local.env
 2. scripts/llm/setup_ollama.sh
 3. scripts/llm/check_ollama_health.sh
 4. scripts/llm/run_inference_local.sh
@@ -275,7 +276,7 @@ Este script:
 ### Paso 3: configurar variables LLM locales
 
 ```bash
-cp config/llm.local.example.env config/llm.local.env
+source config/llm.local.env
 ```
 
 Editar config/llm.local.env si queres otro modelo.
@@ -295,7 +296,7 @@ source config/llm.local.env
 
 Este script:
 
-1. carga config/llm.local.env (o defaults)
+1. carga config/llm.local.env
 2. actualiza model en config/inference.yaml
 3. ejecuta fases 3 y 4
 
@@ -390,7 +391,7 @@ Campos principales:
 
 Checklist:
 
-1. Revisar host, port, database y user en config/connections.example.yaml.
+1. Revisar host, port, database y user en config/connections.yaml.
 2. Confirmar variable de password (password_env) exportada.
 3. Probar conectividad de red/VPN.
 
@@ -428,7 +429,7 @@ Ejemplo:
 
 ```bash
 python -m pip install -r requirements.txt
-PYTHONPATH=src python run_pipeline.py --root . --phases config/phases.yaml --connections config/connections.example.yaml
+PYTHONPATH=src python run_pipeline.py --root . --phases config/phases.yaml --connections config/connections.yaml
 ```
 
 Para CI, usar variables de entorno seguras para credenciales y endpoint LLM.

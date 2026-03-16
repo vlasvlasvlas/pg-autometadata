@@ -12,7 +12,6 @@ venv/
 # Local env files
 .env
 .env.*
-config/llm.local.env
 
 # Backup files
 *.bak

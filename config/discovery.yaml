@@ -2,10 +2,8 @@ version: 1
 phase: discovery
 
 connection:
-  # Perfil definido en config/connections.example.yaml.
+  # Perfil definido en config/connections.yaml.
   profile: dev_local
-  # Base objetivo dentro de la conexión (override opcional del perfil).
-  database: my_database
   # Opcion alternativa: URI completa en variable de entorno.
   # Si se usa, prioriza esta opcion.
   # url_env: PG_URI_DEV
